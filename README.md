@@ -37,15 +37,45 @@ If you want to use an environment variable for the DSN, replace the first parame
 
 The DSN has to be in the following format:
 
-`mysql://[user[:password]@]host[:port]/dbname`
+`mysql://[user[:password]@]host[:port]/dbname[?charset=utf8mb4]`
 
-For further explanations have a look at the [Doctrine documentation](http://doctrine-orm.readthedocs.org/projects/doctrine-dbal/en/latest/reference/configuration.html#connecting-using-a-url).
+For further explanations have a look at the [Doctrine documentation](https://www.doctrine-project.org/projects/doctrine-dbal/en/current/reference/configuration.html#connecting-using-a-url).
+
+### Optional parameters and command line switches
+
+#### no-progress
+
+This turns off printing some progress information on `stderr`. Useful in scripting contexts.
+
+Example:
+`slimdump --no-progress {DSN} {config-file}`
+
+#### buffer-size
 
 You can also specify the buffer size, which can be useful on shared environments where your `max_allowed_packet` is low.
 Do this by using the optional cli-option `buffer-size`. Add a suffix (KB, MB or GB) to the value for better readability.
 
 Example:
 `slimdump --buffer-size=16MB {DSN} {config-file}`
+
+#### single-line-insert-statements
+
+If you have tables with a large number of rows to dump and you are not planning to keep your dumps under version
+control, you might consider writing each `INSERT INTO`-statement to a single line instead of one line per row. You can
+do this by using the cli-parameter `single-line-insert-statements`. This can speed up the import significantly.
+
+Example:
+`slimdump --single-line-insert-statements {DSN} {config-file}`
+
+#### output-csv
+
+This option turns on the CSV (comma separated values) output mode. It must be given the path to a directory where `.csv` files will be created. The files are named according to tables, e. g. `my_table.csv`.
+
+CSV files contain only data. They are not created for views, triggers, or tables dumped with the `schema` dump mode. Also, no files will be created for empty tables.
+
+Since this output format needs to write to different files for different tables, redirecting `stdout` output (as can be done for the default MySQL SQL mode) is not possible.
+
+**Experimental Feature** CSV support is a new, [experimental feature](https://github.com/webfactory/slimdump/pull/92). The output formatting may change at any time.  
 
 ## Configuration
 Configuration is stored in XML format somewhere in your filesystem. As a benefit, you could add the configuration to your repository to share a quickstart to your database dump with your coworkers.
@@ -119,7 +149,7 @@ A simple way to export roughly a percentage of the users is this:
 ```xml
 <?xml version="1.0" ?>
 <slimdump>
-  <!-- Dump all users whose usernames begin with foo -->
+  <!-- Dump every tenth user -->
   <table name="user" dump="full" condition="id % 10 = 0" />
 </slimdump>
 ```
@@ -227,9 +257,11 @@ You can execute the phpunit-tests by calling `vendor/bin/phpunit`.
 
 ## Credits, Copyright and License
 
-This tool was started at webfactory GmbH in Bonn by [mpdude](https://github.com/mpdude).
+This tool was written by webfactory GmbH, Bonn, Germany. We're a software development agency with a focus on PHP (mostly [Symfony](http://github.com/symfony/symfony)). We're big fans of automation, DevOps, CI and CD, and of open source in general.
+
+If you're a developer looking for new challenges, we'd like to hear from you! Otherwise, if this tool is useful for you, add a ⭐️.
 
 - <https://www.webfactory.de>
 - <https://twitter.com/webfactory>
 
-Copyright 2014-2017 webfactory GmbH, Bonn. Code released under [the MIT license](LICENSE).
+Copyright 2014-2022 webfactory GmbH, Bonn. Code released under [the MIT license](LICENSE).

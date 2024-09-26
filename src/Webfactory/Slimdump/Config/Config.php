@@ -31,8 +31,6 @@ class Config
      * Merge two configurations together.
      * If two configurations specify the same table,
      * the last one wins.
-     *
-     * @param Config $other
      */
     public function merge(self $other)
     {
@@ -50,10 +48,7 @@ class Config
     }
 
     /**
-     * @param array  $haystack
      * @param string $needle
-     *
-     * @return mixed
      */
     public static function findBySelector(array $haystack, $needle)
     {

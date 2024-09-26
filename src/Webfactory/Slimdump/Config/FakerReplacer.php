@@ -39,7 +39,7 @@ class FakerReplacer
      */
     public static function isFakerColumn($replacement)
     {
-        return 0 === strpos($replacement, self::PREFIX);
+        return str_starts_with($replacement, self::PREFIX);
     }
 
     /**
@@ -53,7 +53,7 @@ class FakerReplacer
     {
         $replacementMethodName = str_replace(self::PREFIX, '', $replacementId);
 
-        if (false !== strpos($replacementMethodName, '->')) {
+        if (str_contains($replacementMethodName, '->')) {
             [$modifierName, $replacementMethodName] = explode('->', $replacementMethodName);
 
             $this->validateReplacementConfiguredModifier($modifierName, $replacementMethodName);
@@ -76,7 +76,7 @@ class FakerReplacer
     private function validateReplacementConfigured($replacementName)
     {
         try {
-            $this->faker->__get($replacementName);
+            $this->faker->$replacementName();
         } catch (InvalidArgumentException $exception) {
             throw new InvalidReplacementOptionException($replacementName.' is no valid faker replacement');
         }
@@ -85,7 +85,7 @@ class FakerReplacer
     private function validateReplacementConfiguredModifier($replacementModifier, $replacementName)
     {
         try {
-            $this->faker->__get($replacementModifier)->__get($replacementName);
+            $this->faker->$replacementModifier()->$replacementName();
         } catch (InvalidArgumentException $exception) {
             throw new InvalidReplacementOptionException($replacementModifier.'->'.$replacementName.' is no valid faker replacement');
         }

@@ -22,9 +22,9 @@ class ConfigBuilder
     /**
      * @param string $xmlString
      *
-     * @throws InvalidXmlException
-     *
      * @return Config
+     *
+     * @throws InvalidXmlException
      */
     public static function createFromXmlString($xmlString)
     {
@@ -37,7 +37,7 @@ class ConfigBuilder
             $errorAsString = '';
             foreach ($errors as $error) {
                 /* @var libXMLError $error */
-                $errorAsString .= sprintf("%s %d: %s\n", $error->file, $error->line, $error->message);
+                $errorAsString .= \sprintf("%s %d: %s\n", $error->file, $error->line, $error->message);
             }
             throw new InvalidXmlException("Invalid XML! Errors:\n$errorAsString");
         }
@@ -56,8 +56,6 @@ class ConfigBuilder
     }
 
     /**
-     * @param array $xmlStrings
-     *
      * @return Config|null
      */
     public static function createConfigurationFromConsecutiveXmlStrings(array $xmlStrings)

@@ -7,20 +7,22 @@ on:
     pull_request:
 
 env:
-    PHP_VERSION: 7.2
+    PHP_VERSION: 8.1
 
 jobs:
     composer-require-checker:
         name: Check missing composer requirements
-        runs-on: ubuntu-18.04
+        runs-on: ubuntu-22.04
         steps:
-            -   uses: actions/checkout@v2
-            -   name: Konfiguriere PHP-Version und -Einstellungen im Worker-Node
-                run: |
-                    sudo update-alternatives --set php /usr/bin/php$PHP_VERSION
-                    echo 'variables_order = "EGPCS"' | sudo tee /etc/php/$PHP_VERSION/cli/conf.d/99-local.ini
+            -   name: Configure PHP version
+                uses: shivammathur/setup-php@v2
+                with:
+                    php-version: ${{ env.PHP_VERSION }}
+                    coverage: none
+                    tools: composer:v2
+            -   uses: actions/checkout@v4
             -   name: Cache Composer Dependencies
-                uses: actions/cache@v1
+                uses: actions/cache@v4
                 with:
                     path: vendor/
                     key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.*') }}
@@ -28,7 +30,7 @@ jobs:
                         composer-${{ env.PHP_VERSION }}-${{ github.ref }}
                         composer-${{ env.PHP_VERSION }}-
             -   run: |
-                    composer install --no-interaction --no-scripts --no-progress --no-suggest
+                    composer update --no-interaction --no-scripts --no-progress
                     composer show
             -   name: ComposerRequireChecker
-                uses: docker://webfactory/composer-require-checker:2.1.0
+                uses: docker://ghcr.io/webfactory/composer-require-checker:4.8.0

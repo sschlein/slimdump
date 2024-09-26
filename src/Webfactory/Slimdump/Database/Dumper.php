@@ -3,289 +3,167 @@
 namespace Webfactory\Slimdump\Database;
 
 use Doctrine\DBAL\Connection;
-use Doctrine\DBAL\DBALException;
-use Doctrine\DBAL\Driver\PDOConnection;
+use Doctrine\DBAL\Schema;
+use Doctrine\DBAL\Schema\AbstractAsset;
+use Doctrine\DBAL\Types\BinaryType;
+use Doctrine\DBAL\Types\BlobType;
+use InvalidArgumentException;
 use PDO;
+use RuntimeException;
 use Symfony\Component\Console\Helper\ProgressBar;
-use Symfony\Component\Console\Output\ConsoleOutput;
 use Symfony\Component\Console\Output\OutputInterface;
 use Webfactory\Slimdump\Config\Table;
 
 class Dumper
 {
-    /** @var OutputInterface */
-    protected $output;
-
-    /** @var int */
-    protected $bufferSize;
+    /**
+     * @var Connection
+     */
+    private $connection;
 
     /**
-     * @param OutputInterface $output
-     * @param int|null        $bufferSize Default buffer size is 100MB
+     * @var OutputFormatDriverInterface
      */
-    public function __construct(OutputInterface $output, $bufferSize = null)
-    {
-        $this->output = $output;
-        $this->bufferSize = $bufferSize ?: 104857600;
-    }
-
-    public function exportAsUTF8()
-    {
-        $this->output->writeln('SET NAMES utf8;', OutputInterface::OUTPUT_RAW);
-    }
-
-    public function disableForeignKeys()
-    {
-        $this->output->writeln("SET FOREIGN_KEY_CHECKS = 0;\n", OutputInterface::OUTPUT_RAW);
-    }
-
-    public function enableForeignKeys()
-    {
-        $this->output->writeln("\nSET FOREIGN_KEY_CHECKS = 1;", OutputInterface::OUTPUT_RAW);
-    }
+    private $outputFormatDriver;
 
     /**
-     * @param            $table
-     * @param Connection $db
-     * @param bool       $keepAutoIncrement
-     * @param bool       $noProgress
-     *
-     * @throws DBALException
+     * @var OutputInterface
      */
-    public function dumpSchema($table, Connection $db, $keepAutoIncrement = true, bool $noProgress = false)
+    private $progressOutput;
+
+    public function __construct(Connection $connection, OutputFormatDriverInterface $outputFormatDriver, OutputInterface $progressOutput)
     {
-        $this->keepalive($db);
-        $this->output->writeln("-- BEGIN STRUCTURE $table", OutputInterface::OUTPUT_RAW);
-        $this->output->writeln("DROP TABLE IF EXISTS `$table`;", OutputInterface::OUTPUT_RAW);
+        $this->connection = $connection;
+        $this->outputFormatDriver = $outputFormatDriver;
+        $this->progressOutput = $progressOutput;
+    }
 
-        $tableCreationCommand = $db->fetchColumn("SHOW CREATE TABLE `$table`", [], 1);
+    public function beginDump(): void
+    {
+        $this->outputFormatDriver->beginDump();
+    }
 
-        if (!$keepAutoIncrement) {
-            $tableCreationCommand = preg_replace('/ AUTO_INCREMENT=\d*/', '', $tableCreationCommand);
-        }
+    public function endDump(): void
+    {
+        $this->outputFormatDriver->endDump();
+    }
 
-        $this->output->writeln($tableCreationCommand.";\n", OutputInterface::OUTPUT_RAW);
-
-        if (!$noProgress) {
-            $progress = new ProgressBar($this->output, 1);
-            $format = "Dumping schema <fg=cyan>$table</>: <fg=yellow>%percent:3s%%</>";
-            $progress->setFormat($format);
-            $progress->setOverwrite(true);
-            $progress->setRedrawFrequency(1);
-            $progress->start();
-            $progress->setFormat("Dumping schema <fg=green>$table</>: <fg=green>%percent:3s%%</> Took: %elapsed%");
-            $progress->finish();
-            if ($this->output instanceof ConsoleOutput) {
-                $this->output->getErrorOutput()->write("\n"); // write a newline after the progressbar.
-            }
+    public function dumpAsset(AbstractAsset $asset, Table $config): void
+    {
+        if ($asset instanceof Schema\Table) {
+            $this->dumpTable($asset, $config);
+        } elseif ($asset instanceof Schema\View) {
+            $this->dumpView($asset, $config);
+        } else {
+            throw new InvalidArgumentException();
         }
     }
 
-    /**
-     * @param Connection $db
-     * @param string     $tableName
-     * @param int        $level     One of the Table::TRIGGER_* constants
-     */
-    public function dumpTriggers(Connection $db, $tableName, $level = Table::DEFINER_NO_DEFINER)
+    private function dumpTable(Schema\Table $asset, Table $config): void
     {
-        $triggers = $db->fetchAll(sprintf('SHOW TRIGGERS LIKE %s', $db->quote($tableName)));
+        $table = $asset->getName();
+        $this->outputFormatDriver->dumpTableStructure($asset, $config);
 
-        if (!$triggers) {
-            return;
+        $progress = new ProgressBar($this->progressOutput, 1);
+        $format = "Dumping schema <fg=cyan>$table</>: <fg=yellow>%percent:3s%%</>";
+        $progress->setFormat($format);
+        $progress->setOverwrite(true);
+        $progress->setRedrawFrequency(1);
+        $progress->start();
+        $progress->setFormat("Dumping schema <fg=green>$table</>: <fg=green>%percent:3s%%</> Took: %elapsed%");
+        $progress->finish();
+        $this->progressOutput->write("\n"); // write a newline after the progressbar.
+
+        if ($config->isDataDumpRequired()) {
+            $this->dumpData($asset, $config);
         }
 
-        $this->output->writeln("-- BEGIN TRIGGERS $tableName", OutputInterface::OUTPUT_RAW);
-
-        foreach ($triggers as $row) {
-            $createTriggerCommand = $db->fetchColumn("SHOW CREATE TRIGGER `{$row['Trigger']}`", [], 2);
-
-            if (Table::DEFINER_NO_DEFINER === $level) {
-                $createTriggerCommand = preg_replace('/DEFINER=`[^`]*`@`[^`]*` /', '', $createTriggerCommand);
-            }
-
-            $this->output->writeln($createTriggerCommand.";\n", OutputInterface::OUTPUT_RAW);
+        if ($config->isTriggerDumpRequired()) {
+            $this->dumpTriggers($asset, $config);
         }
     }
 
-    public function dumpView(Connection $db, $viewName, $level = Table::DEFINER_NO_DEFINER)
+    private function dumpView(Schema\View $asset, Table $config): void
     {
-        $this->output->writeln("-- BEGIN VIEW $viewName", OutputInterface::OUTPUT_RAW);
-
-        $createViewCommand = $db->fetchColumn("SHOW CREATE VIEW `{$viewName}`", [], 1);
-
-        if (Table::DEFINER_NO_DEFINER === $level) {
-            $createViewCommand = preg_replace('/DEFINER=`[^`]*`@`[^`]*` /', '', $createViewCommand);
-        }
-
-        $this->output->writeln($createViewCommand.";\n", OutputInterface::OUTPUT_RAW);
+        $this->outputFormatDriver->dumpViewDefinition($asset, $config);
     }
 
-    /**
-     * @param            $table
-     * @param Table      $tableConfig
-     * @param Connection $db
-     * @param bool       $noProgress
-     *
-     * @throws DBALException
-     */
-    public function dumpData($table, Table $tableConfig, Connection $db, bool $noProgress)
+    private function dumpTriggers(Schema\Table $asset, Table $config): void
     {
-        $this->keepalive($db);
-        $cols = $this->cols($table, $db);
+        $this->outputFormatDriver->dumpTriggerDefinition($asset, $config);
+    }
+
+    private function dumpData(Schema\Table $asset, Table $tableConfig): void
+    {
+        $table = $asset->getName();
+        $columnOrder = array_map(function (array $columnInfo): string {
+            return $columnInfo['Field'];
+        }, $this->connection->fetchAllAssociative(\sprintf('SHOW COLUMNS FROM `%s`', $asset->getName())));
 
         $s = 'SELECT ';
         $first = true;
-        foreach (array_keys($cols) as $name) {
-            $isBlobColumn = $this->isBlob($name, $cols);
-
+        foreach ($columnOrder as $columnName) {
             if (!$first) {
                 $s .= ', ';
             }
-
-            $s .= $tableConfig->getSelectExpression($name, $isBlobColumn);
-            $s .= " AS `$name`";
-
             $first = false;
+
+            $s .= $tableConfig->getSelectExpression($columnName, self::isBlob($asset->getColumn($columnName)))." AS `$columnName`";
         }
         $s .= " FROM `$table`";
-
         $s .= $tableConfig->getCondition();
 
-        $this->output->writeln("-- BEGIN DATA $table", OutputInterface::OUTPUT_RAW);
-
-        $bufferSize = 0;
-        $max = $this->bufferSize;
-        $numRows = (int)$db->fetchColumn("SELECT COUNT(*) FROM `$table`".$tableConfig->getCondition());
+        $numRows = (int) $this->connection->fetchOne("SELECT COUNT(*) FROM `$table`".$tableConfig->getCondition());
 
         if (0 === $numRows) {
             // Fail fast: No data to dump.
             return;
         }
 
-        if (!$noProgress) {
-            $progress = new ProgressBar($this->output, $numRows);
-            $progress->setFormat("Dumping data <fg=cyan>$table</>: <fg=yellow>%percent:3s%%</> %remaining%/%estimated%");
-            $progress->setOverwrite(true);
-            $progress->setRedrawFrequency(max($numRows / 100, 1));
-            $progress->start();
+        $progress = new ProgressBar($this->progressOutput, $numRows);
+        $progress->setFormat("Dumping data <fg=cyan>$table</>: <fg=yellow>%percent:3s%%</> %remaining%/%estimated%");
+        $progress->setOverwrite(true);
+        $progress->setRedrawFrequency((int) max($numRows / 100, 1));
+        $progress->start();
+
+        $wrappedConnection = $this->connection->getWrappedConnection();
+        if ($wrappedConnection instanceof PDO) {
+            $pdo = $wrappedConnection;
+        } elseif ($wrappedConnection instanceof \Doctrine\DBAL\Driver\PDO\Connection) {
+            $pdo = $wrappedConnection->getWrappedConnection();
         } else {
-            $progress = null;
+            throw new RuntimeException('failed to obtain the wrapped PDO object from the DBAL connection');
+        }
+        $pdo->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $actualRows = 0;
+
+        $this->outputFormatDriver->beginTableDataDump($asset, $tableConfig);
+
+        $result = $this->connection->executeQuery($s);
+        while (($row = $result->fetchAssociative()) !== false) {
+            $this->outputFormatDriver->dumpTableRow($row, $asset, $tableConfig);
+
+            $progress->advance();
+            ++$actualRows;
         }
 
-        /** @var PDOConnection $wrappedConnection */
-        $wrappedConnection = $db->getWrappedConnection();
-        $wrappedConnection->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $progress->setFormat("Dumping data <fg=green>$table</>: <fg=green>%percent:3s%%</> Took: %elapsed%");
+        $progress->finish();
+        $this->progressOutput->write("\n"); // write a newline after the progressbar.
 
-        foreach ($db->query($s) as $row) {
-            $b = $this->rowLengthEstimate($row);
-
-            // Start a new statement to ensure that the line does not get too long.
-            if ($bufferSize && $bufferSize + $b > $max) {
-                $this->output->writeln(';', OutputInterface::OUTPUT_RAW);
-                $bufferSize = 0;
-            }
-
-            if (0 === $bufferSize) {
-                $this->output->write($this->insertValuesStatement($table, $cols), false, OutputInterface::OUTPUT_RAW);
-            } else {
-                $this->output->write(',', false, OutputInterface::OUTPUT_RAW);
-            }
-
-            $firstCol = true;
-            $this->output->write("\n(", false, OutputInterface::OUTPUT_RAW);
-
-            foreach ($row as $name => $value) {
-                $isBlobColumn = $this->isBlob($name, $cols);
-
-                if (!$firstCol) {
-                    $this->output->write(', ', false, OutputInterface::OUTPUT_RAW);
-                }
-
-                $this->output->write($tableConfig->getStringForInsertStatement($name, $value, $isBlobColumn, $db), false, OutputInterface::OUTPUT_RAW);
-                $firstCol = false;
-            }
-            $this->output->write(')', false, OutputInterface::OUTPUT_RAW);
-            $bufferSize += $b;
-            if (null !== $progress) {
-                $progress->advance();
-            }
+        if ($actualRows !== $numRows) {
+            $this->progressOutput->writeln(\sprintf('<error>Expected %d rows, actually processed %d – verify results!</error>', $numRows, $actualRows));
         }
 
-        if (null !== $progress) {
-            $progress->setFormat("Dumping data <fg=green>$table</>: <fg=green>%percent:3s%%</> Took: %elapsed%");
-            $progress->finish();
-            if ($this->output instanceof ConsoleOutput) {
-                $this->output->getErrorOutput()->write("\n"); // write a newline after the progressbar.
-            }
-        }
+        $pdo->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
 
-        $wrappedConnection->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
-
-        if ($bufferSize) {
-            $this->output->writeln(';', OutputInterface::OUTPUT_RAW);
-        }
-
-        $this->output->writeln('', OutputInterface::OUTPUT_RAW);
+        $this->outputFormatDriver->endTableDataDump($asset, $tableConfig);
     }
 
-    /**
-     * @param string     $table
-     * @param Connection $db
-     *
-     * @return array
-     */
-    protected function cols($table, Connection $db)
+    public static function isBlob(Schema\Column $column): bool
     {
-        $c = [];
-        foreach ($db->fetchAll("SHOW COLUMNS FROM `$table`") as $row) {
-            $c[$row['Field']] = $row['Type'];
-        }
+        $type = $column->getType();
 
-        return $c;
-    }
-
-    /**
-     * @param string               $table
-     * @param array(string=>mixed) $cols
-     *
-     * @return string
-     */
-    protected function insertValuesStatement($table, $cols)
-    {
-        return "INSERT INTO `$table` (`".implode('`, `', array_keys($cols)).'`) VALUES ';
-    }
-
-    /**
-     * @param string $col
-     * @param array  $definitions
-     *
-     * @return bool
-     */
-    protected function isBlob($col, array $definitions)
-    {
-        return false !== stripos($definitions[$col], 'blob');
-    }
-
-    /**
-     * @param array $row
-     *
-     * @return int
-     */
-    protected function rowLengthEstimate(array $row)
-    {
-        $l = 0;
-        foreach ($row as $value) {
-            $l += \strlen($value);
-        }
-
-        return $l;
-    }
-
-    private function keepalive(Connection $db)
-    {
-        if (false === $db->ping()) {
-            $db->close();
-            $db->connect();
-        }
+        return $type instanceof BlobType || $type instanceof BinaryType;
     }
 }

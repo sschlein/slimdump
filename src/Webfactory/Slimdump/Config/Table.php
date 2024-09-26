@@ -46,7 +46,7 @@ class Table
         if (\defined($const)) {
             $this->dump = \constant($const);
         } else {
-            throw new InvalidDumpTypeException(sprintf('Invalid dump type %s for table %s.', $attr->dump, $this->selector));
+            throw new InvalidDumpTypeException(\sprintf('Invalid dump type %s for table %s.', $attr->dump, $this->selector));
         }
 
         $this->keepAutoIncrement = self::attributeToBoolean($attr->{'keep-auto-increment'}, true);
@@ -201,7 +201,6 @@ class Table
      * @param string      $columnName
      * @param string|null $value
      * @param bool        $isBlobColumn
-     * @param Connection  $db
      *
      * @return string
      */
@@ -245,7 +244,7 @@ class Table
      *
      * @return Column
      */
-    private function findColumn($columnName)
+    public function findColumn($columnName)
     {
         return Config::findBySelector($this->columns, $columnName);
     }
